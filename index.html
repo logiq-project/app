@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Logi-Q MVP</title>
+
+  <!-- LIFF SDK -->
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+
+  <style>
+    :root{
+      --font: 26px;
+      --btn-font: 30px;
+      --btn-height: 92px;
+      --gap: 18px;
+      --radius: 14px;
+      --border: 2px;
+    }
+    html,body{
+      margin:0;
+      padding:0;
+      background:#fff;
+      color:#111;
+      font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", sans-serif;
+      font-size: var(--font);
+      line-height:1.35;
+    }
+
+    /* === site_id未取得時の全画面ブロック警告 === */
+    .blocker{
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+      background: #d60000; /* 赤背景 */
+      color: #fff;        /* 白文字 */
+    }
+    .blocker .box{
+      max-width: 720px;
+      width: 100%;
+      border: 3px solid rgba(255,255,255,0.9);
+      border-radius: 18px;
+      padding: 22px 18px;
+      box-sizing: border-box;
+      background: rgba(0,0,0,0.08);
+    }
+    .blocker .title{
+      font-size: 34px;
+      font-weight: 900;
+      margin-bottom: 10px;
+      letter-spacing: 0.02em;
+    }
+    .blocker .msg{
+      font-size: 26px;
+      font-weight: 800;
+      margin-bottom: 14px;
+      line-height: 1.4;
+    }
+    .blocker .hint{
+      font-size: 22px;
+      opacity: 0.95;
+      line-height: 1.5;
+    }
+
+    .wrap{
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 22px 18px 30px;
+    }
+    h1{
+      font-size: 28px;
+      margin: 0 0 14px 0;
+      font-weight: 800;
+    }
+    .card{
+      border: var(--border) solid #111;
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 18px;
+    }
+    label{
+      display:block;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+    input[type="text"]{
+      width: 100%;
+      box-sizing: border-box;
+      font-size: 28px;
+      padding: 14px 14px;
+      border: var(--border) solid #111;
+      border-radius: var(--radius);
+      outline: none;
+    }
+    .meta{
+      font-size: 24px;
+      opacity: 0.95;
+      margin-top: 10px;
+      word-break: break-all;
+    }
+    .buttons{
+      display:flex;
+      flex-direction: column;
+      gap: var(--gap);
+      margin-top: 10px;
+    }
+    button{
+      width: 100%;
+      height: var(--btn-height);
+      font-size: var(--btn-font);
+      font-weight: 900;
+      border: var(--border) solid #111;
+      border-radius: var(--radius);
+      background: #f5f5f5;
+      color:#111;
+      cursor: pointer;
+      letter-spacing: 0.04em;
+    }
+    button:active{
+      transform: translateY(1px);
+    }
+    button[disabled]{
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .status{
+      margin-top: 18px;
+      padding: 14px 16px;
+      border-radius: var(--radius);
+      border: var(--border) solid #111;
+      font-size: 26px;
+    }
+    .ok{ background: #f0fff3; }
+    .ng{ background: #fff2f2; }
+    .small{
+      font-size: 22px;
+      opacity: 0.9;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+
+<body>
+  <!-- site_id未取得時の全画面警告 -->
+  <div id="siteIdBlocker" class="blocker" aria-live="assertive">
+    <div class="box">
+      <div class="title">警告</div>
+      <div class="msg">QRコードを読み直してください</div>
+      <div class="hint">
+        現場ID（site_id）が取得できません。<br>
+        もう一度、現場のQRコードから起動してください。
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap" id="appRoot">
+    <h1>Logi-Q（MVP）</h1>
+
+    <div class="card">
+      <label for="vehicleNumber">車両番号</label>
+      <input id="vehicleNumber" type="text" inputmode="text" autocomplete="off" placeholder="例）品川 500 あ 12-34" />
+
+      <div class="meta">
+        現場ID（site_id）: <span id="siteIdText">取得中…</span>
+      </div>
+      <div class="small">
+        ※ site_id はURLパラメータから自動取得します（例：...?site_id=ABC123）
+      </div>
+    </div>
+
+    <div class="buttons">
+      <button id="btnArrival"  data-event="ARRIVAL">到着</button>
+      <button id="btnStart"    data-event="START">荷役開始</button>
+      <button id="btnComplete" data-event="COMPLETE">完了</button>
+    </div>
+
+    <div id="status" class="status" style="display:none;"></div>
+
+    <div class="small" style="margin-top:14px;">
+      送信後は二重押し防止のためボタンを無効化します。<br/>
+      （現場での“連打”は機械より強いので先に封じます）
+    </div>
+  </div>
+
+  <script>
+    /************************************************************
+     * 設定（ここだけ差し替えればOK）
+     ************************************************************/
+    const WEBHOOK_URL = "https://example.com/your-webhook"; // ★Make等のWebhook URLに変更
+    const LIFF_ID     = "YOUR_LIFF_ID";                     // ★LIFF IDに変更
+
+    /************************************************************
+     * ユーティリティ
+     ************************************************************/
+    const $ = (id) => document.getElementById(id);
+
+    function getQueryParam(name) {
+      const url = new URL(window.location.href);
+      return url.searchParams.get(name) || "";
+    }
+
+    function nowIso() {
+      return new Date().toISOString();
+    }
+
+    function setStatus(message, type) {
+      const el = $("status");
+      el.style.display = "block";
+      el.classList.remove("ok", "ng");
+      el.classList.add(type === "ok" ? "ok" : "ng");
+      el.textContent = message;
+    }
+
+    function normalizeVehicleNumber(v) {
+      // 前後空白だけ整理（強制フォーマットは現場で揉めるので最小限）
+      return (v || "").trim();
+    }
+
+    function showSiteIdBlocker(show) {
+      $("siteIdBlocker").style.display = show ? "flex" : "none";
+    }
+
+    /************************************************************
+     * 状態管理
+     ************************************************************/
+    let lineUserId = "";
+    let isSending = false;
+    let lockedBySiteId = false; // site_id未取得で操作ブロック中か
+
+    function canOperate() {
+      const siteId = getQueryParam("site_id");
+      const vehicleNumber = normalizeVehicleNumber($("vehicleNumber").value);
+
+      if (!siteId) return false;
+      if (!vehicleNumber) return false;
+      if (isSending) return false;
+      return true;
+    }
+
+    function updateButtonsEnabledState() {
+      const enabled = canOperate();
+      ["btnArrival","btnStart","btnComplete"].forEach(id => {
+        $(id).disabled = !enabled;
+      });
+    }
+
+    /************************************************************
+     * site_id 未取得時：起動直後に全画面警告＋操作ブロック
+     ************************************************************/
+    function enforceSiteIdGuardOnBoot() {
+      const siteId = getQueryParam("site_id");
+
+      if (!siteId) {
+        lockedBySiteId = true;
+        $("siteIdText").textContent = "（未取得）";
+        showSiteIdBlocker(true);
+        // ボタンは当然全部無効化（見た目上も押せない）
+        ["btnArrival","btnStart","btnComplete"].forEach(id => $(id).disabled = true);
+        // 入力も意味がないので止める（現場の誤操作防止）
+        $("vehicleNumber").disabled = true;
+        return;
+      }
+
+      lockedBySiteId = false;
+      showSiteIdBlocker(false);
+      $("vehicleNumber").disabled = false;
+      $("siteIdText").textContent = siteId;
+    }
+
+    /************************************************************
+     * LIFF 初期化＆ユーザーID取得
+     ************************************************************/
+    async function initLiffAndGetUserId() {
+      if (!LIFF_ID || LIFF_ID === "YOUR_LIFF_ID") {
+        setStatus("LIFF_ID が未設定です。HTML内の LIFF_ID を設定してください。", "ng");
+        return;
+      }
+
+      try {
+        await liff.init({ liffId: LIFF_ID });
+
+        // ログインしてなければログインへ
+        if (!liff.isLoggedIn()) {
+          liff.login();
+          return; // リダイレクトされる
+        }
+
+        // プロフィール取得（userId）
+        const profile = await liff.getProfile();
+        lineUserId = profile.userId || "";
+
+        if (!lineUserId) {
+          setStatus("LINEユーザーIDを取得できませんでした。LINE内で開いているか確認してください。", "ng");
+        }
+      } catch (err) {
+        console.error(err);
+        setStatus("LIFF初期化に失敗しました。LIFF設定（エンドポイントURL等）を確認してください。", "ng");
+      }
+    }
+
+    /************************************************************
+     * 送信処理
+     ************************************************************/
+    async function sendEvent(eventType) {
+      // site_id未取得ブロック中は何もしない（物理的には押せないが保険）
+      if (lockedBySiteId) return;
+
+      const siteId = getQueryParam("site_id");
+      const vehicleNumber = normalizeVehicleNumber($("vehicleNumber").value);
+
+      if (!siteId) {
+        // 起動後にURLが変なケース。即ブロックに落とす。
+        enforceSiteIdGuardOnBoot();
+        return;
+      }
+      if (!vehicleNumber) {
+        // 入力が空なら押せない設計だが、念のため保険
+        setStatus("車両番号を入力してください。", "ng");
+        $("vehicleNumber").focus();
+        updateButtonsEnabledState();
+        return;
+      }
+      if (!WEBHOOK_URL || WEBHOOK_URL === "https://example.com/your-webhook") {
+        setStatus("WEBHOOK_URL が未設定です。HTML内の WEBHOOK_URL を設定してください。", "ng");
+        updateButtonsEnabledState();
+        return;
+      }
+      if (!lineUserId) {
+        setStatus("LINEユーザーIDが未取得です。少し待つか、LINE内で開き直してください。", "ng");
+        updateButtonsEnabledState();
+        return;
+      }
+      if (isSending) return;
+
+      isSending = true;
+      updateButtonsEnabledState();
+      setStatus("送信中…", "ok");
+
+      const payload = {
+        site_id: siteId,
+        vehicle_number: vehicleNumber,
+        event_type: eventType,   // ARRIVAL / START / COMPLETE
+        timestamp: nowIso(),
+        line_user_id: lineUserId
+      };
+
+      try {
+        const res = await fetch(WEBHOOK_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          console.error("Webhook error:", res.status, text);
+          isSending = false;
+          updateButtonsEnabledState();
+          setStatus("送信に失敗しました。電波/URL/Make側の受信設定を確認してください。", "ng");
+          return;
+        }
+
+        // 成功：二重押し防止でこのまま無効化を維持
+        setStatus("送信しました", "ok");
+        // isSending を true のままにしてボタン復帰させない（要件）
+      } catch (err) {
+        console.error(err);
+        isSending = false;
+        updateButtonsEnabledState();
+        setStatus("送信に失敗しました。通信状況を確認してもう一度押してください。", "ng");
+      }
+    }
+
+    /************************************************************
+     * 初期描画＆イベント
+     ************************************************************/
+    (function main() {
+      // まず site_id ガード（起動直後）
+      enforceSiteIdGuardOnBoot();
+
+      // 車両番号の入力に応じてボタン活性/非活性（要件）
+      // ※site_idが無い場合は入力欄がdisabledなのでイベントは実質動かない
+      $("vehicleNumber").addEventListener("input", () => {
+        if (lockedBySiteId) return;
+        updateButtonsEnabledState();
+      });
+
+      // 初期状態：車両番号が空なのでボタンは無効（要件）
+      updateButtonsEnabledState();
+
+      // ボタンイベント
+      ["btnArrival", "btnStart", "btnComplete"].forEach(id => {
+        $(id).addEventListener("click", (e) => {
+          const eventType = e.currentTarget.getAttribute("data-event");
+          sendEvent(eventType);
+        });
+      });
+
+      // LIFF初期化開始（site_idが無くても実行はしてOK。ユーザーIDは取っておく）
+      initLiffAndGetUserId();
+    })();
+  </script>
+</body>
+</html>
